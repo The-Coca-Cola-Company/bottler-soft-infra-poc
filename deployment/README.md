@@ -51,9 +51,7 @@ The Soft Bottler Manager is designed as a **SPOKE** in the hub-spoke architectur
 
 Deploy this infrastructure to your Azure subscription with a single click:
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2F%7BYOUR-GITHUB-ORG%7D%2F%7BYOUR-REPO%7D%2Fmain%2Fsoft-bottler-manager%2Fdeployment%2Fsoft-bottler-complete-infra.json)
-
-> **Note**: Replace `{YOUR-GITHUB-ORG}` and `{YOUR-REPO}` with your actual GitHub organization and repository names.
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FThe-Coca-Cola-Company%2Fsoft-bottler-infrastructure%2Fmain%2Fdeployment%2Fsoft-bottler-complete-infra.json)
 
 ## 📝 Pre-Deployment Requirements
 
