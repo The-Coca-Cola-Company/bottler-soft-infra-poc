@@ -53,8 +53,6 @@ Deploy this infrastructure to your Azure subscription with a single click:
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2F%7BYOUR-GITHUB-ORG%7D%2F%7BYOUR-REPO%7D%2Fmain%2Fsoft-bottler-manager%2Fdeployment%2Fsoft-bottler-complete-infra.json)
 
-> **Note**: Replace `{YOUR-GITHUB-ORG}` and `{YOUR-REPO}` with your actual GitHub organization and repository names.
-
 ## 📝 Pre-Deployment Requirements
 
 ### 1. Azure Subscription
