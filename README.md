@@ -2,7 +2,8 @@
 
 # 🏭 Bottler Agent - Azure Deployment 
 
-![Cross Tenant Architecture](img/Image%20cross.png)
+![Cross Tenant Architecture](deployment/img/Image%20cross.png)
+
 
 
 This repository contains the Azure Resource Manager (ARM) templates for deploying the **COMPLETE** infrastructure required by the Soft Bottler Manager - a spoke component in the TCCC multi-tenant hub-spoke architecture.
@@ -51,7 +52,9 @@ The Soft Bottler Manager is designed as a **SPOKE** in the hub-spoke architectur
 
 Deploy this infrastructure to your Azure subscription with a single click:
 
+
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FThe-Coca-Cola-Company%2Fsoft-bottler-infrastructure%2Fmain%2Fdeployment%2Fsoft-bottler-complete-infra.json)
+
 
 ## 📝 Pre-Deployment Requirements
 
@@ -357,4 +360,6 @@ az deployment group create \
 **Version**: 3.0.0  
 **Last Updated**: 8-5-2025
 **Template**: `soft-bottler-complete-infra.json`  
+
 **Maintained By**: TCCC Engineering Team (cvanegas@coca-cola.com)
+
