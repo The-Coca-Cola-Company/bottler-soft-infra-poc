@@ -2,7 +2,7 @@
 
 # 🏭 Bottler Agent - Azure Deployment 
 
-![Cross Tenant Architecture](img/Image%20cross.png)
+![Cross Tenant Architecture](deployment/img/Image%20cross.png)
 
 
 This repository contains the Azure Resource Manager (ARM) templates for deploying the **COMPLETE** infrastructure required by the Soft Bottler Manager - a spoke component in the TCCC multi-tenant hub-spoke architecture.
