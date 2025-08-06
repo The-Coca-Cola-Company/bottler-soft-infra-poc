@@ -38,18 +38,6 @@
         "description": "API Management subscription key for this bottler"
       }
     },
-    "azureAIFoundryEndpoint": {
-      "type": "string",
-      "metadata": {
-        "description": "Azure AI Foundry endpoint (e.g., https://YOUR-URL-01.openai.azure.com/)"
-      }
-    },
-    "azureAIFoundryKey": {
-      "type": "securestring",
-      "metadata": {
-        "description": "Azure AI Foundry subscription key"
-      }
-    },
     "azureAIFoundryDeployment": {
       "type": "string",
       "defaultValue": "tccc-model-router",
@@ -86,8 +74,7 @@
     "appInsightsName": "[format('{0}-ai-{1}', variables('resourcePrefix'), variables('uniqueSuffix'))]",
     "logAnalyticsName": "[format('{0}-law-{1}', variables('resourcePrefix'), variables('uniqueSuffix'))]",
     "functionAppName": "[format('{0}-func-{1}', variables('resourcePrefix'), variables('uniqueSuffix'))]",
-    "appServicePlanName": "[format('{0}-asp-{1}', variables('resourcePrefix'), variables('uniqueSuffix'))]",
-    "vnetName": "[format('{0}-vnet-{1}', variables('resourcePrefix'), variables('uniqueSuffix'))]"
+    "appServicePlanName": "[format('{0}-asp-{1}', variables('resourcePrefix'), variables('uniqueSuffix'))]"
   },
   "resources": [
     {
@@ -327,20 +314,20 @@
       }
     },
     {
-      "comments": "=== AZURE ML WORKSPACE (For AI Foundry Capabilities) ===",
+      "comments": "=== AZURE AI FOUNDRY HUB ===",
       "type": "Microsoft.MachineLearningServices/workspaces",
-      "apiVersion": "2023-04-01",
+      "apiVersion": "2023-10-01",
       "name": "[variables('mlWorkspaceName')]",
       "location": "[parameters('location')]",
+      "kind": "hub",
       "identity": {
         "type": "SystemAssigned"
       },
       "properties": {
-        "friendlyName": "[format('Bottler {0} ML Workspace', parameters('bottlerCode'))]",
+        "friendlyName": "[format('Bottler {0} AI Foundry Hub', parameters('bottlerCode'))]",
         "storageAccount": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
         "applicationInsights": "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
-        "publicNetworkAccess": "Enabled",
-        "v1LegacyMode": false
+        "publicNetworkAccess": "Enabled"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
@@ -378,56 +365,6 @@
       "dependsOn": [
         "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
       ]
-    },
-    {
-      "comments": "=== VIRTUAL NETWORK (For Network Isolation) ===",
-      "type": "Microsoft.Network/virtualNetworks",
-      "apiVersion": "2023-05-01",
-      "name": "[variables('vnetName')]",
-      "location": "[parameters('location')]",
-      "properties": {
-        "addressSpace": {
-          "addressPrefixes": ["10.0.0.0/16"]
-        },
-        "subnets": [
-          {
-            "name": "function-subnet",
-            "properties": {
-              "addressPrefix": "10.0.1.0/24",
-              "serviceEndpoints": [
-                {
-                  "service": "Microsoft.Storage"
-                },
-                {
-                  "service": "Microsoft.ServiceBus"
-                },
-                {
-                  "service": "Microsoft.AzureCosmosDB"
-                }
-              ],
-              "delegations": [
-                {
-                  "name": "delegation",
-                  "properties": {
-                    "serviceName": "Microsoft.Web/serverFarms"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "name": "ml-subnet",
-            "properties": {
-              "addressPrefix": "10.0.2.0/24",
-              "serviceEndpoints": [
-                {
-                  "service": "Microsoft.Storage"
-                }
-              ]
-            }
-          }
-        ]
-      }
     },
     {
       "comments": "=== APP SERVICE PLAN ===",
@@ -517,11 +454,11 @@
             },
             {
               "name": "AZURE_AI_FOUNDRY_ENDPOINT",
-              "value": "[parameters('azureAIFoundryEndpoint')]"
+              "value": ""
             },
             {
               "name": "AZURE_AI_FOUNDRY_KEY",
-              "value": "[parameters('azureAIFoundryKey')]"
+              "value": ""
             },
             {
               "name": "AZURE_AI_FOUNDRY_DEPLOYMENT",
@@ -553,7 +490,7 @@
             },
             {
               "name": "ML_WORKSPACE_ID",
-              "value": "[reference(resourceId('Microsoft.MachineLearningServices/workspaces', variables('mlWorkspaceName')), '2023-04-01').workspaceId]"
+              "value": "[reference(resourceId('Microsoft.MachineLearningServices/workspaces', variables('mlWorkspaceName')), '2023-10-01').workspaceId]"
             },
             {
               "name": "BLOB_CACHE_CONTAINER",
@@ -596,8 +533,7 @@
           "http20Enabled": true
         },
         "httpsOnly": true,
-        "publicNetworkAccess": "Enabled",
-        "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'function-subnet')]"
+        "publicNetworkAccess": "Enabled"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
@@ -606,8 +542,7 @@
         "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosAccountName'))]",
         "[resourceId('Microsoft.ServiceBus/namespaces', variables('serviceBusNamespaceName'))]",
         "[resourceId('Microsoft.EventGrid/topics', variables('eventGridTopicName'))]",
-        "[resourceId('Microsoft.MachineLearningServices/workspaces', variables('mlWorkspaceName'))]",
-        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        "[resourceId('Microsoft.MachineLearningServices/workspaces', variables('mlWorkspaceName'))]"
       ]
     },
     {
@@ -638,7 +573,7 @@
     },
     "mlWorkspaceId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.MachineLearningServices/workspaces', variables('mlWorkspaceName')), '2023-04-01').workspaceId]"
+      "value": "[reference(resourceId('Microsoft.MachineLearningServices/workspaces', variables('mlWorkspaceName')), '2023-10-01').workspaceId]"
     },
     "appInsightsConnectionString": {
       "type": "string",
