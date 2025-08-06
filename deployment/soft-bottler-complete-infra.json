@@ -59,6 +59,13 @@
       "metadata": {
         "description": "Service Bus SKU"
       }
+    },
+    "deploymentTimestamp": {
+      "type": "string",
+      "defaultValue": "[utcNow('yyyy-MM-ddTHH:mm:ssZ')]",
+      "metadata": {
+        "description": "Timestamp of the deployment"
+      }
     }
   },
   "variables": {
@@ -585,7 +592,7 @@
     },
     "deploymentTimestamp": {
       "type": "string",
-      "value": "[utcNow()]"
+      "value": "[parameters('deploymentTimestamp')]"
     }
   }
 }
