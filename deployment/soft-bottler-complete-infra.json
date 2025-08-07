@@ -380,10 +380,10 @@
       "name": "[variables('appServicePlanName')]",
       "location": "[parameters('location')]",
       "sku": {
-        "name": "Y1",
-        "tier": "Dynamic",
-        "size": "Y1",
-        "family": "Y"
+        "name": "P1v3",
+        "tier": "PremiumV3",
+        "size": "P1v3",
+        "capacity": 1
       },
       "properties": {
         "reserved": true
