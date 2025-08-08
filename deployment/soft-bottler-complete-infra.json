@@ -38,32 +38,6 @@
         "description": "API Management subscription key for this bottler"
       }
     },
-    "azureAIFoundryEndpoint": {
-      "type": "string",
-      "metadata": {
-        "description": "Azure AI Foundry endpoint URL for this bottler (e.g., https://bottler-ai.openai.azure.com/)"
-      }
-    },
-    "azureAIFoundryKey": {
-      "type": "securestring",
-      "metadata": {
-        "description": "Azure AI Foundry API key for this bottler"
-      }
-    },
-    "azureAIFoundryDeployment": {
-      "type": "string",
-      "defaultValue": "gpt-4",
-      "metadata": {
-        "description": "Azure AI Foundry model deployment name for this bottler (e.g., gpt-4, deepseek-v3, llama-3)"
-      }
-    },
-    "azureAIFoundryApiVersion": {
-      "type": "string",
-      "defaultValue": "2024-12-01-preview",
-      "metadata": {
-        "description": "Azure AI Foundry API version"
-      }
-    },
     "serviceBusSku": {
       "type": "string",
       "defaultValue": "Standard",
@@ -402,7 +376,7 @@
       }
     },
     {
-      "comments": "=== FUNCTION APP (With All Service Connections) === IMPORTANT: Each bottler MUST use their own Azure AI Foundry resources",
+      "comments": "=== FUNCTION APP (With All Service Connections) === IMPORTANT: Azure AI Foundry settings must be configured POST-DEPLOYMENT",
       "type": "Microsoft.Web/sites",
       "apiVersion": "2022-09-01",
       "name": "[variables('functionAppName')]",
@@ -473,39 +447,39 @@
             },
             {
               "name": "AZURE_AI_FOUNDRY_ENDPOINT",
-              "value": "[parameters('azureAIFoundryEndpoint')]"
+              "value": ""
             },
             {
               "name": "AZURE_AI_FOUNDRY_KEY",
-              "value": "[parameters('azureAIFoundryKey')]"
+              "value": ""
             },
             {
               "name": "AZURE_AI_FOUNDRY_DEPLOYMENT",
-              "value": "[parameters('azureAIFoundryDeployment')]"
+              "value": ""
             },
             {
               "name": "AZURE_AI_FOUNDRY_API_VERSION",
-              "value": "[parameters('azureAIFoundryApiVersion')]"
+              "value": "2024-12-01-preview"
             },
             {
               "name": "AI_FOUNDRY_ENDPOINT",
-              "value": "[parameters('azureAIFoundryEndpoint')]"
+              "value": ""
             },
             {
               "name": "AI_FOUNDRY_KEY",
-              "value": "[parameters('azureAIFoundryKey')]"
+              "value": ""
             },
             {
               "name": "AI_FOUNDRY_API_KEY",
-              "value": "[parameters('azureAIFoundryKey')]"
+              "value": ""
             },
             {
               "name": "AI_FOUNDRY_DEPLOYMENT",
-              "value": "[parameters('azureAIFoundryDeployment')]"
+              "value": ""
             },
             {
               "name": "AI_FOUNDRY_API_VERSION",
-              "value": "[parameters('azureAIFoundryApiVersion')]"
+              "value": "2024-12-01-preview"
             },
             {
               "name": "COSMOS_CONNECTION_STRING",
@@ -625,6 +599,23 @@
     "deploymentTimestamp": {
       "type": "string",
       "value": "[parameters('deploymentTimestamp')]"
+    },
+    "postDeploymentInstructions": {
+      "type": "object",
+      "value": {
+        "important": "Azure AI Foundry must be configured POST-DEPLOYMENT",
+        "steps": [
+          "1. Create Azure AI Foundry resource for this bottler",
+          "2. Deploy the AI model (e.g., gpt-4, deepseek-v3, llama-3)",
+          "3. Get the endpoint URL and API key",
+          "4. Update Function App settings with:",
+          "   - AZURE_AI_FOUNDRY_ENDPOINT: Your AI Foundry endpoint URL",
+          "   - AZURE_AI_FOUNDRY_KEY: Your API key",
+          "   - AZURE_AI_FOUNDRY_DEPLOYMENT: Your model deployment name"
+        ],
+        "mlWorkspaceId": "[reference(resourceId('Microsoft.MachineLearningServices/workspaces', variables('mlWorkspaceName')), '2023-10-01').workspaceId]",
+        "note": "The ML Workspace created can be used to set up AI Foundry"
+      }
     }
   }
 }
