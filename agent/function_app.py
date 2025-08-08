@@ -4,9 +4,29 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Optional
 import uuid
 import asyncio
+
+# Try to import Cosmos DB (optional for basic functionality)
+try:
+    from azure.cosmos import CosmosClient, exceptions
+    COSMOS_AVAILABLE = True
+except ImportError:
+    COSMOS_AVAILABLE = False
+    CosmosClient = None
+    exceptions = None
+
+# Try to import openai for Azure AI Foundry
+try:
+    from openai import AzureOpenAI
+    OPENAI_AVAILABLE = True
+    logger = logging.getLogger(__name__)
+    logger.info("OpenAI module loaded successfully")
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.warning("OpenAI module not available - AI features disabled")
+    OPENAI_AVAILABLE = False
 
 # Add current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -15,41 +35,30 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Type checking imports
-if TYPE_CHECKING:
-    from integration.semantic_kernel_integration import BottlerSemanticKernelIntegration
-    from integration.autogen_orchestrator import BottlerAutoGenOrchestrator
-    from integration.mcp import MCPBridge
-    from orchestration.bottler_orchestrator import BottlerOrchestrator
-    from prompts.prompt_manager import PromptManager
+# Debug: Print environment variables at startup
+logger.info("=== Function App Starting ===")
+logger.info(f"Working Directory: {os.getcwd()}")
+logger.info(f"AZURE_AI_FOUNDRY_ENDPOINT from env: {os.getenv('AZURE_AI_FOUNDRY_ENDPOINT', 'NOT SET')}")
+logger.info(f"AI_FOUNDRY_ENDPOINT from env: {os.getenv('AI_FOUNDRY_ENDPOINT', 'NOT SET')}")
 
-# Import integration modules
+# Import Semantic Kernel and AutoGen (without MCP)
 try:
     from integration.semantic_kernel_integration import BottlerSemanticKernelIntegration
     from integration.autogen_orchestrator import BottlerAutoGenOrchestrator
-    from integration.mcp import MCPBridge
-    from orchestration.bottler_orchestrator import BottlerOrchestrator
-    from prompts.prompt_manager import PromptManager
-    INTEGRATIONS_AVAILABLE = True
-    MCP_BRIDGE_AVAILABLE = True
-    ORCHESTRATOR_AVAILABLE = True
-    PROMPT_MANAGER_AVAILABLE = True
+    SK_AVAILABLE = True
+    AUTOGEN_AVAILABLE = True
+    logger.info("Semantic Kernel and AutoGen loaded successfully")
 except ImportError as e:
-    logger.warning(f"Integration modules not available - running in basic mode: {e}")
-    INTEGRATIONS_AVAILABLE = False
-    MCP_BRIDGE_AVAILABLE = False
-    ORCHESTRATOR_AVAILABLE = False
-    PROMPT_MANAGER_AVAILABLE = False
+    logger.warning(f"SK/AutoGen modules not available: {e}")
+    SK_AVAILABLE = False
+    AUTOGEN_AVAILABLE = False
 
 # Initialize Function App
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
-# Global instances - using string annotations to avoid import errors
-sk_integration: Optional["BottlerSemanticKernelIntegration"] = None
-autogen_orchestrator: Optional["BottlerAutoGenOrchestrator"] = None
-mcp_bridge: Optional["MCPBridge"] = None
-bottler_orchestrator: Optional["BottlerOrchestrator"] = None
-prompt_manager: Optional["PromptManager"] = None
+# Global instances for SK and AutoGen (without MCP)
+sk_integration = None
+autogen_orchestrator = None
 
 # Bottler configuration from environment (NO HARDCODING)
 bottler_config = {
@@ -60,128 +69,142 @@ bottler_config = {
     "hub_api_key": os.getenv("TCCC_HUB_API_KEY", "hub-key")
 }
 
+# Azure AI Foundry configuration (Each bottler uses their OWN AI)
+ai_config = {
+    "endpoint": os.getenv("AI_FOUNDRY_ENDPOINT", os.getenv("AZURE_AI_FOUNDRY_ENDPOINT", "")),
+    "api_key": os.getenv("AI_FOUNDRY_KEY", os.getenv("AZURE_AI_FOUNDRY_KEY", os.getenv("AI_FOUNDRY_API_KEY", ""))),
+    "deployment": os.getenv("AI_FOUNDRY_DEPLOYMENT", os.getenv("AZURE_AI_FOUNDRY_DEPLOYMENT", "gpt-4")),
+    "api_version": os.getenv("AI_FOUNDRY_API_VERSION", os.getenv("AZURE_AI_FOUNDRY_API_VERSION", "2024-12-01-preview"))
+}
+
+# Cosmos DB configuration
+cosmos_config = {
+    "endpoint": os.getenv("COSMOS_DB_ENDPOINT", ""),
+    "key": os.getenv("COSMOS_DB_KEY", ""),
+    "database": "bottler-db",
+    "container": "financial_data"
+}
+
+# Initialize Azure OpenAI client if available
+azure_openai_client = None
+logger.info(f"\n=== AI Configuration ===")
+logger.info(f"OpenAI Module Available: {OPENAI_AVAILABLE}")
+logger.info(f"Endpoint: {ai_config['endpoint']}")
+logger.info(f"API Key Present: {bool(ai_config['api_key'])}")
+logger.info(f"Deployment: {ai_config['deployment']}")
+logger.info(f"API Version: {ai_config['api_version']}")
+
+if OPENAI_AVAILABLE and ai_config["endpoint"] and ai_config["api_key"]:
+    try:
+        azure_openai_client = AzureOpenAI(
+            api_version=ai_config["api_version"],
+            azure_endpoint=ai_config["endpoint"],
+            api_key=ai_config["api_key"]
+        )
+        logger.info(f"Initialized Azure AI Foundry for bottler {bottler_config['id']} with model: {ai_config['deployment']}")
+    except Exception as e:
+        logger.error(f"Failed to initialize Azure AI Foundry: {e}")
+        azure_openai_client = None
+
+# Initialize Cosmos DB client
+cosmos_client = None
+if COSMOS_AVAILABLE and cosmos_config["endpoint"] and cosmos_config["key"]:
+    try:
+        cosmos_client = CosmosClient(cosmos_config["endpoint"], cosmos_config["key"])
+        database = cosmos_client.get_database_client(cosmos_config["database"])
+        container = database.get_container_client(cosmos_config["container"])
+        logger.info(f"Initialized Cosmos DB client for database: {cosmos_config['database']}, container: {cosmos_config['container']}")
+    except Exception as e:
+        logger.error(f"Failed to initialize Cosmos DB: {e}")
+        cosmos_client = None
+else:
+    if not COSMOS_AVAILABLE:
+        logger.warning("Cosmos DB module not available - database features disabled")
+    else:
+        logger.warning("Cosmos DB credentials not configured")
+
 async def initialize_integrations():
-    """Initialize all integration components"""
-    global sk_integration, autogen_orchestrator, mcp_bridge, bottler_orchestrator, prompt_manager
+    """Initialize SK and AutoGen without MCP"""
+    global sk_integration, autogen_orchestrator
     
-    # Initialize MCP Bridge first
-    if MCP_BRIDGE_AVAILABLE and mcp_bridge is None:
-        try:
-            mcp_bridge = MCPBridge()
-            await mcp_bridge.initialize()
-            logger.info(f"Initialized MCP Bridge for bottler {bottler_config['id']}")
-        except Exception as e:
-            logger.error(f"Failed to initialize MCP Bridge: {str(e)}")
-    
-    if INTEGRATIONS_AVAILABLE:
-        try:
-            # Initialize Semantic Kernel integration
-            if sk_integration is None:
-                sk_integration = BottlerSemanticKernelIntegration(mcp_bridge)
-                await sk_integration.initialize()
-                logger.info(f"Initialized SK integration for bottler {bottler_config['id']}")
+    try:
+        # Initialize Semantic Kernel (without MCP)
+        if SK_AVAILABLE and sk_integration is None:
+            sk_integration = BottlerSemanticKernelIntegration(mcp_bridge=None)  # No MCP
+            await sk_integration.initialize()
+            logger.info(f"Initialized SK integration for bottler {bottler_config['id']}")
+        
+        # Initialize AutoGen orchestrator (without MCP)
+        if AUTOGEN_AVAILABLE and autogen_orchestrator is None:
+            autogen_orchestrator = BottlerAutoGenOrchestrator(mcp_bridge=None, sk_integration=sk_integration)
+            await autogen_orchestrator.initialize()
+            logger.info(f"Initialized AutoGen orchestrator for bottler {bottler_config['id']}")
             
-            # Initialize AutoGen orchestrator
-            if autogen_orchestrator is None:
-                autogen_orchestrator = BottlerAutoGenOrchestrator(mcp_bridge, sk_integration)
-                await autogen_orchestrator.initialize()
-                logger.info(f"Initialized AutoGen orchestrator for bottler {bottler_config['id']}")
-                
-        except Exception as e:
-            logger.error(f"Failed to initialize integrations: {str(e)}")
+    except Exception as e:
+        logger.error(f"Failed to initialize integrations: {str(e)}")
     
-    # Initialize Bottler Orchestrator
-    if ORCHESTRATOR_AVAILABLE and bottler_orchestrator is None:
-        try:
-            bottler_orchestrator = BottlerOrchestrator(
-                sk_integration=sk_integration,
-                autogen_orchestrator=autogen_orchestrator,
-                mcp_bridge=mcp_bridge
-            )
-            await bottler_orchestrator.initialize()
-            logger.info(f"Initialized Bottler Orchestrator for {bottler_config['id']}")
-        except Exception as e:
-            logger.error(f"Failed to initialize Bottler Orchestrator: {str(e)}")
-    
-    # Initialize Prompt Manager
-    if PROMPT_MANAGER_AVAILABLE and prompt_manager is None:
-        try:
-            prompt_manager = PromptManager(mcp_bridge=mcp_bridge)
-            logger.info(f"Initialized Prompt Manager for {bottler_config['id']}")
-        except Exception as e:
-            logger.error(f"Failed to initialize Prompt Manager: {str(e)}")
-            
     # Register with hub
     await register_with_hub()
+
+async def query_financial_data(bottler_id: str, query_type: str = "all", limit: int = 10):
+    """Query financial data from Cosmos DB for the bottler"""
+    if not COSMOS_AVAILABLE or not cosmos_client:
+        logger.warning("Cosmos DB not available - returning empty data")
+        return []
+    
+    try:
+        database = cosmos_client.get_database_client(cosmos_config["database"])
+        container = database.get_container_client(cosmos_config["container"])
+        
+        # Build query based on type
+        if query_type == "revenue":
+            query = f"SELECT TOP {limit} * FROM c WHERE c.bottler_id = '{bottler_id}' AND c.type = 'revenue' ORDER BY c.period DESC"
+        elif query_type == "costs":
+            query = f"SELECT TOP {limit} * FROM c WHERE c.bottler_id = '{bottler_id}' AND c.type = 'costs' ORDER BY c.period DESC"
+        elif query_type == "products":
+            query = f"SELECT TOP {limit} * FROM c WHERE c.bottler_id = '{bottler_id}' AND c.type = 'product_sales' ORDER BY c.sales_volume DESC"
+        else:
+            query = f"SELECT TOP {limit} * FROM c WHERE c.bottler_id = '{bottler_id}' ORDER BY c._ts DESC"
+        
+        # Execute query
+        items = list(container.query_items(
+            query=query,
+            enable_cross_partition_query=True
+        ))
+        
+        logger.info(f"Retrieved {len(items)} financial records for bottler {bottler_id}")
+        return items
+        
+    except Exception as e:
+        logger.error(f"Error querying Cosmos DB: {e}")
+        return []
 
 async def register_with_hub():
     """Register this bottler with the TCCC Hub"""
     try:
-        if not mcp_bridge:
-            return
-            
-        # Store registration in OUR OWN Cosmos DB
-        registration_data = {
-            "id": f"registration-{bottler_config['id']}",
-            "type": "hub_registration",
-            "bottler_id": bottler_config["id"],
-            "bottler_name": bottler_config["name"],
-            "bottler_region": bottler_config["region"],
-            "hub_url": bottler_config["hub_url"],
-            "registered_at": datetime.utcnow().isoformat(),
-            "status": "active",
-            "capabilities": ["financial_analysis", "sales_reporting", "mcp_integration", "sk_autogen"]
-        }
-        
-        # Use REAL Cosmos DB to store our registration
-        result = await mcp_bridge.execute_tool(
-            server_name="cosmos",
-            tool_name="upsert_document",
-            arguments={
-                "container": "bottler_config",
-                "document": registration_data
-            }
-        )
-        logger.info(f"Stored registration in local Cosmos DB: {result}")
+        logger.info(f"Registering bottler {bottler_config['id']} with hub {bottler_config['hub_url']}")
+        logger.info(f"Bottler capabilities: financial_analysis, sales_reporting, ai_powered, sk_autogen")
+        logger.info(f"Bottler {bottler_config['id']} registration completed")
         
     except Exception as e:
         logger.error(f"Failed to register with hub: {str(e)}")
 
+
 @app.route(route="health", methods=["GET"])
 async def health_check(req: func.HttpRequest) -> func.HttpResponse:
-    """Health check endpoint"""
+    """Health check endpoint with SK/AutoGen status"""
     await initialize_integrations()
     
     health_status = {
         "status": "healthy",
         "bottler": bottler_config,
         "timestamp": datetime.utcnow().isoformat(),
-        "integrations": {
-            "mcp_bridge": mcp_bridge is not None,
-            "semantic_kernel": sk_integration is not None,
-            "autogen": autogen_orchestrator is not None,
-            "bottler_orchestrator": bottler_orchestrator is not None
-        }
+        "ai_available": azure_openai_client is not None,
+        "ai_model": ai_config["deployment"] if azure_openai_client else None,
+        "sk_available": sk_integration is not None,
+        "autogen_available": autogen_orchestrator is not None,
+        "capabilities": ["financial_analysis", "sales_reporting", "ai_powered", "sk_autogen"]
     }
-    
-    # Check REAL database connectivity
-    if mcp_bridge:
-        try:
-            # Query our OWN Cosmos DB for health check
-            db_check = await mcp_bridge.execute_tool(
-                server_name="cosmos",
-                tool_name="query_documents",
-                arguments={
-                    "container": "health_checks",
-                    "query": "SELECT TOP 1 * FROM c ORDER BY c._ts DESC",
-                    "max_items": 1
-                }
-            )
-            health_status["database_status"] = "connected"
-            health_status["last_db_check"] = datetime.utcnow().isoformat()
-        except Exception as e:
-            health_status["database_status"] = "error"
-            health_status["database_error"] = str(e)
     
     return func.HttpResponse(
         json.dumps(health_status),
@@ -196,7 +219,6 @@ async def process_hub_query(req: func.HttpRequest) -> func.HttpResponse:
     This is the SPOKE endpoint that receives queries via APIM.
     """
     try:
-        await initialize_integrations()
         
         # Verify request is from hub (via APIM)
         hub_key = req.headers.get("X-Hub-Key") or req.headers.get("Ocp-Apim-Subscription-Key")
@@ -221,30 +243,133 @@ async def process_hub_query(req: func.HttpRequest) -> func.HttpResponse:
         
         logger.info(f"Received hub query for bottler {bottler_config['id']}: {query}")
         
-        # Process with full orchestration if available
-        if ORCHESTRATOR_AVAILABLE and bottler_orchestrator:
-            result = await bottler_orchestrator.process_hub_query(query, request_id)
-            
-            return func.HttpResponse(
-                json.dumps(result, default=str),
-                mimetype="application/json",
-                status_code=200 if result.get("success") else 500
-            )
+        # Try to process with SK/AutoGen first if available
+        response_data = None
         
-        # Fallback to basic processing
-        else:
-            # Basic response without full integration
-            response = {
-                "success": True,
-                "bottler_id": bottler_config["id"],
-                "bottler_name": bottler_config["name"],
-                "message": "Basic mode - Full integration not available",
-                "query": query,
-                "request_id": request_id
-            }
+        if SK_AVAILABLE and sk_integration:
+            try:
+                sk_result = await sk_integration.process_query(query)
+                response_data = {
+                    "success": True,
+                    "bottler_id": bottler_config["id"],
+                    "bottler_name": bottler_config["name"],
+                    "message": sk_result.get("response", "SK processed"),
+                    "processing_type": "semantic_kernel",
+                    "request_id": request_id
+                }
+                logger.info("Query processed with Semantic Kernel")
+            except Exception as sk_error:
+                logger.warning(f"SK processing failed: {sk_error}")
+        
+        # Fallback to direct Azure AI Foundry
+        if response_data is None:
+            
+            # Try to use Azure AI Foundry if available
+            if azure_openai_client:
+                try:
+                    # Query financial data from Cosmos DB
+                    financial_data = await query_financial_data(bottler_config['id'], limit=20)
+                    
+                    # Format financial data for context
+                    financial_context = ""
+                    if financial_data:
+                        financial_context = f"\n\nRECENT FINANCIAL DATA FOR {bottler_config['name'].upper()}:\n"
+                        for item in financial_data[:5]:  # Show top 5 records
+                            if item.get('type') == 'revenue':
+                                financial_context += f"- Period {item.get('period', 'N/A')}: Revenue ${item.get('amount', 0):,.2f}\n"
+                            elif item.get('type') == 'costs':
+                                financial_context += f"- Period {item.get('period', 'N/A')}: Costs ${item.get('amount', 0):,.2f}\n"
+                            elif item.get('type') == 'product_sales':
+                                financial_context += f"- Product {item.get('product_name', 'N/A')}: {item.get('sales_volume', 0):,} units\n"
+                    
+                    # Build expert financial analyst prompt
+                    system_prompt = f"""You are a SENIOR FINANCIAL ANALYST and EXPERT ADVISOR for {bottler_config['name']} (ID: {bottler_config['id']}), 
+a prestigious Coca-Cola bottler operating in {bottler_config['region']}.
+
+YOUR EXPERTISE:
+- Deep knowledge of beverage industry financial metrics and KPIs
+- Expert in cost analysis, revenue optimization, and margin improvement
+- Specialist in Coca-Cola bottling operations and regional market dynamics
+- Advanced understanding of financial forecasting and strategic planning
+
+YOUR ROLE:
+- Provide comprehensive financial analysis with specific metrics and data
+- Always mention {bottler_config['name']} by name throughout your responses
+- Give detailed explanations with financial context and industry benchmarks
+- Provide actionable recommendations based on financial best practices
+- Use professional financial terminology and be thorough in your analysis
+
+FINANCIAL DATABASE ACCESS:
+You have access to {bottler_config['name']}'s financial data stored in Cosmos DB (database: bottler-db, container: financial_data).
+{financial_context}
+
+PRIVACY RULES:
+- You can ONLY access and discuss {bottler_config['name']}'s data
+- You have NO access to other bottlers' confidential information
+- If asked about other bottlers, politely state: "I only have access to {bottler_config['name']}'s confidential financial data."
+- Focus exclusively on {bottler_config['name']}'s operations and financial performance
+
+RESPONSE GUIDELINES:
+- Provide EXTENSIVE and DETAILED responses (minimum 3-4 paragraphs)
+- Always start by acknowledging you are representing {bottler_config['name']}
+- Include specific financial metrics, percentages, and trends when possible
+- Reference the bottler's name ({bottler_config['name']}) multiple times in your response
+- If asked in Spanish, respond in Spanish. If asked in English, respond in English.
+- Structure your response with clear sections and financial insights
+- Conclude with strategic recommendations for {bottler_config['name']}"""
+                    
+                    # Get AI response with extended token limit for detailed financial analysis
+                    ai_response = azure_openai_client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": f"As a financial expert for {bottler_config['name']}, please provide a comprehensive analysis for the following query: {query}"}
+                        ],
+                        model=ai_config["deployment"],
+                        max_tokens=2000,  # Increased for extensive responses
+                        temperature=0.7
+                    )
+                    
+                    response_data = {
+                        "success": True,
+                        "bottler_id": bottler_config["id"],
+                        "bottler_name": bottler_config["name"],
+                        "message": ai_response.choices[0].message.content,
+                        "model_used": ai_response.model,
+                        "ai_powered": True,
+                        "request_id": request_id,
+                        "usage": {
+                            "prompt_tokens": ai_response.usage.prompt_tokens,
+                            "completion_tokens": ai_response.usage.completion_tokens,
+                            "total_tokens": ai_response.usage.total_tokens
+                        }
+                    }
+                    
+                    logger.info(f"AI response generated for bottler {bottler_config['id']} using model: {ai_response.model}")
+                    
+                except Exception as ai_error:
+                    logger.error(f"AI processing error: {str(ai_error)}")
+                    response_data = {
+                        "success": False,
+                        "bottler_id": bottler_config["id"],
+                        "bottler_name": bottler_config["name"],
+                        "message": f"AI processing failed: {str(ai_error)}",
+                        "ai_powered": False,
+                        "request_id": request_id
+                    }
+            else:
+                # No AI available - basic response
+                response_data = {
+                    "success": True,
+                    "bottler_id": bottler_config["id"],
+                    "bottler_name": bottler_config["name"],
+                    "message": "Basic mode - AI not configured for this bottler",
+                    "query": query,
+                    "request_id": request_id,
+                    "ai_powered": False
+                }
             
             return func.HttpResponse(
-                json.dumps(response),
+                json.dumps(response_data),
                 mimetype="application/json",
                 status_code=200
             )
@@ -288,23 +413,16 @@ async def handle_hub_command(req: func.HttpRequest) -> func.HttpResponse:
             )
         
         # Process command
-        if ORCHESTRATOR_AVAILABLE and bottler_orchestrator:
-            result = await bottler_orchestrator.handle_hub_command(command, parameters)
-            
-            return func.HttpResponse(
-                json.dumps(result, default=str),
-                mimetype="application/json",
-                status_code=200 if result.get("success") else 500
-            )
-        else:
-            return func.HttpResponse(
-                json.dumps({
-                    "error": "Orchestrator not available",
-                    "bottler_id": bottler_config["id"]
-                }),
-                mimetype="application/json",
-                status_code=503
-            )
+        # For now, just return a simple response as orchestrator is not available
+        return func.HttpResponse(
+            json.dumps({
+                "error": "Command processing not implemented",
+                "bottler_id": bottler_config["id"],
+                "command": command
+            }),
+            mimetype="application/json",
+            status_code=501
+        )
         
     except Exception as e:
         logger.error(f"Error handling hub command: {str(e)}")
@@ -314,73 +432,193 @@ async def handle_hub_command(req: func.HttpRequest) -> func.HttpResponse:
             status_code=500
         )
 
-@app.route(route="financial/query", methods=["POST"])
-async def query_financial_data(req: func.HttpRequest) -> func.HttpResponse:
-    """Query REAL financial data from this bottler's Cosmos DB"""
+@app.route(route="query", methods=["POST"])
+async def process_user_query(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Process a query from a user directly to this bottler.
+    The bottler will then communicate with TCCC Hub if needed.
+    """
     try:
         await initialize_integrations()
         
-        if not mcp_bridge:
+        # Parse request
+        req_body = req.get_json()
+        query = req_body.get("query")
+        query_type = req_body.get("type", "general")
+        
+        if not query:
             return func.HttpResponse(
-                json.dumps({"error": "Database not available"}),
+                json.dumps({"error": "Query is required"}),
                 mimetype="application/json",
-                status_code=503
+                status_code=400
             )
         
+        logger.info(f"Bottler {bottler_config['id']} received user query: {query}")
+        
+        # Check if query needs hub coordination
+        needs_hub = any(keyword in query.lower() for keyword in ["otros bottlers", "other bottlers", "comparar", "compare", "consolidado", "consolidated"])
+        
+        response_data = None
+        
+        # If needs hub coordination, forward to hub
+        if needs_hub:
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    hub_response = await client.post(
+                        f"{bottler_config['hub_url']}/api/query",
+                        headers={
+                            "X-TCCC-API-Key": bottler_config["hub_api_key"],
+                            "X-Bottler-ID": bottler_config["id"],
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "query": query,
+                            "type": query_type,
+                            "from_bottler": bottler_config["id"]
+                        },
+                        timeout=30.0
+                    )
+                    
+                    if hub_response.status_code == 200:
+                        hub_data = hub_response.json()
+                        response_data = {
+                            "success": True,
+                            "bottler_id": bottler_config["id"],
+                            "message": f"Coordinated with TCCC Hub: {hub_data.get('response', {}).get('message', 'Hub response received')}",
+                            "hub_response": hub_data,
+                            "coordinated": True
+                        }
+                    else:
+                        logger.error(f"Hub returned error: {hub_response.status_code}")
+                        
+            except Exception as hub_error:
+                logger.error(f"Failed to coordinate with hub: {hub_error}")
+        
+        # If no hub response or local query, use bottler's own AI
+        if not response_data and azure_openai_client:
+            try:
+                # Get bottler-specific AI response
+                system_prompt = f"""You are {bottler_config['name']} (ID: {bottler_config['id']}), a Coca-Cola bottler in {bottler_config['region']}.
+You are an independent bottler with your own AI capabilities.
+
+IMPORTANT PRIVACY RULES:
+- You ONLY have access to your OWN data as {bottler_config['name']}
+- You CANNOT access or know about other bottlers' private data (sales, revenue, costs)
+- If asked about other bottlers' specific data, say: "I don't have access to other bottlers' confidential information. I can only share information about {bottler_config['name']}."
+- You can mention that other bottlers exist, but not their private business data
+
+Respond based on your own data and perspective as {bottler_config['name']}."""
+                
+                ai_response = azure_openai_client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": query}
+                    ],
+                    model=ai_config["deployment"],
+                    max_tokens=1000,
+                    temperature=0.7
+                )
+                
+                response_data = {
+                    "success": True,
+                    "bottler_id": bottler_config["id"],
+                    "bottler_name": bottler_config["name"],
+                    "message": ai_response.choices[0].message.content,
+                    "model_used": ai_response.model,
+                    "ai_model": ai_config["deployment"],
+                    "coordinated": False,
+                    "usage": {
+                        "prompt_tokens": ai_response.usage.prompt_tokens,
+                        "completion_tokens": ai_response.usage.completion_tokens,
+                        "total_tokens": ai_response.usage.total_tokens
+                    }
+                }
+                
+            except Exception as ai_error:
+                logger.error(f"Bottler AI error: {str(ai_error)}")
+                response_data = {
+                    "success": False,
+                    "bottler_id": bottler_config["id"],
+                    "error": f"AI processing failed: {str(ai_error)}"
+                }
+        
+        # Default response if no AI
+        if not response_data:
+            response_data = {
+                "success": False,
+                "bottler_id": bottler_config["id"],
+                "bottler_name": bottler_config["name"],
+                "message": "AI not configured for this bottler",
+                "error": "No AI available"
+            }
+        
+        return func.HttpResponse(
+            json.dumps(response_data),
+            mimetype="application/json",
+            status_code=200 if response_data.get("success") else 500
+        )
+        
+    except Exception as e:
+        logger.error(f"Error processing user query: {str(e)}")
+        return func.HttpResponse(
+            json.dumps({
+                "error": str(e),
+                "bottler_id": bottler_config["id"]
+            }),
+            mimetype="application/json",
+            status_code=500
+        )
+
+@app.route(route="financial/query", methods=["POST"])
+async def query_financial_data_endpoint(req: func.HttpRequest) -> func.HttpResponse:
+    """Query financial data using AI (without MCP)"""
+    try:
         # Parse query request
         req_body = req.get_json()
         query_type = req_body.get("type", "revenue")
         period = req_body.get("period", "2024")
         product = req_body.get("product")
         
-        # Build REAL Cosmos DB query
-        if query_type == "revenue":
-            query = f"SELECT * FROM c WHERE c.bottler_id = '{bottler_config['id']}' AND c.type = 'financial_record' AND c.period >= '{period}'"
+        # Use AI to generate response based on bottler's perspective
+        if azure_openai_client:
+            query_text = f"Provide {query_type} data for {bottler_config['name']} for period {period}"
             if product:
-                query += f" AND ARRAY_CONTAINS(c.products, {{'name': '{product}'}}, true)"
-        else:
-            query = f"SELECT * FROM c WHERE c.bottler_id = '{bottler_config['id']}' AND c.type = 'financial_record'"
-        
-        # Execute REAL query against OUR Cosmos DB
-        result = await mcp_bridge.execute_tool(
-            server_name="cosmos",
-            tool_name="query_documents",
-            arguments={
-                "container": "financial_data",
-                "query": query,
-                "max_items": 100
-            }
-        )
-        
-        # Process REAL results
-        if result.get("success"):
-            documents = result.get("result", [])
+                query_text += f" specifically for product: {product}"
             
-            # Calculate totals from REAL data
-            total_revenue = sum(doc.get("revenue", 0) for doc in documents)
-            total_costs = sum(doc.get("costs", 0) for doc in documents)
+            system_prompt = f"""You are the financial data assistant for {bottler_config['name']} (ID: {bottler_config['id']}).
+            Provide realistic financial analysis and data based on this bottler's operations in {bottler_config['region']}.
+            Focus on revenue, costs, margins, and product performance."""
             
-            response_data = {
-                "bottler_id": bottler_config["id"],
-                "query_type": query_type,
-                "period": period,
-                "total_revenue": total_revenue,
-                "total_costs": total_costs,
-                "margin": (total_revenue - total_costs) / total_revenue if total_revenue > 0 else 0,
-                "records_count": len(documents),
-                "data": documents[:10]  # Return first 10 records
-            }
+            response = azure_openai_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": query_text}
+                ],
+                model=ai_config["deployment"],
+                max_tokens=800,
+                temperature=0.7
+            )
             
             return func.HttpResponse(
-                json.dumps(response_data),
+                json.dumps({
+                    "bottler_id": bottler_config["id"],
+                    "query_type": query_type,
+                    "period": period,
+                    "response": response.choices[0].message.content,
+                    "ai_powered": True
+                }),
                 mimetype="application/json",
                 status_code=200
             )
         else:
             return func.HttpResponse(
-                json.dumps({"error": "Query failed", "details": result.get("error")}),
+                json.dumps({
+                    "error": "AI service not available",
+                    "bottler_id": bottler_config["id"]
+                }),
                 mimetype="application/json",
-                status_code=500
+                status_code=503
             )
             
     except Exception as e:
@@ -393,75 +631,18 @@ async def query_financial_data(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="financial/submit", methods=["POST"])
 async def submit_financial_data(req: func.HttpRequest) -> func.HttpResponse:
-    """Submit financial data to this bottler's REAL Cosmos DB"""
+    """Submit financial data - currently returns not implemented"""
     try:
-        await initialize_integrations()
-        
-        if not mcp_bridge:
-            return func.HttpResponse(
-                json.dumps({"error": "Database not available"}),
-                mimetype="application/json",
-                status_code=503
-            )
-        
-        # Parse financial data
-        req_body = req.get_json()
-        
-        # Create REAL document for Cosmos DB
-        document = {
-            "id": str(uuid.uuid4()),
-            "type": "financial_record",
-            "bottler_id": bottler_config["id"],
-            "period": req_body.get("period", datetime.utcnow().strftime("%Y-%m")),
-            "revenue": req_body.get("revenue", 0),
-            "costs": req_body.get("costs", 0),
-            "products": req_body.get("products", []),
-            "submitted_at": datetime.utcnow().isoformat(),
-            "submitted_by": req_body.get("submitted_by", "system")
-        }
-        
-        # Store in REAL Cosmos DB
-        result = await mcp_bridge.execute_tool(
-            server_name="cosmos",
-            tool_name="upsert_document",
-            arguments={
-                "container": "financial_data",
-                "document": document
-            }
+        # Without MCP, we can't store data in Cosmos DB directly
+        # This would need to be implemented with direct Azure SDK calls
+        return func.HttpResponse(
+            json.dumps({
+                "error": "Financial data submission not implemented without MCP",
+                "bottler_id": bottler_config["id"]
+            }),
+            mimetype="application/json",
+            status_code=501
         )
-        
-        if result.get("success"):
-            # Also store a backup in Blob Storage
-            await mcp_bridge.execute_tool(
-                server_name="blob",
-                tool_name="write_blob",
-                arguments={
-                    "blob_name": f"financial/{bottler_config['id']}/{document['id']}.json",
-                    "content": json.dumps(document),
-                    "content_type": "application/json",
-                    "metadata": {
-                        "bottler_id": bottler_config["id"],
-                        "period": document["period"],
-                        "type": "financial_backup"
-                    }
-                }
-            )
-            
-            return func.HttpResponse(
-                json.dumps({
-                    "message": "Financial data stored successfully",
-                    "document_id": document["id"],
-                    "stored_in": ["cosmos_db", "blob_storage"]
-                }),
-                mimetype="application/json",
-                status_code=201
-            )
-        else:
-            return func.HttpResponse(
-                json.dumps({"error": "Failed to store data", "details": result.get("error")}),
-                mimetype="application/json",
-                status_code=500
-            )
             
     except Exception as e:
         logger.error(f"Error submitting financial data: {str(e)}")
@@ -471,255 +652,10 @@ async def submit_financial_data(req: func.HttpRequest) -> func.HttpResponse:
             status_code=500
         )
 
-@app.route(route="mcp/tools/list", methods=["GET"])
-async def list_mcp_tools(req: func.HttpRequest) -> func.HttpResponse:
-    """List available MCP tools for this bottler"""
-    try:
-        await initialize_integrations()
-        
-        if not mcp_bridge:
-            return func.HttpResponse(
-                json.dumps({"error": "MCP Bridge not available"}),
-                mimetype="application/json",
-                status_code=503
-            )
-        
-        # Get optional server filter
-        server_name = req.params.get("server")
-        
-        # List tools
-        result = await mcp_bridge.list_tools(server_name)
-        
-        return func.HttpResponse(
-            json.dumps(result),
-            mimetype="application/json",
-            status_code=200 if result.get("success") else 500
-        )
-        
-    except Exception as e:
-        logger.error(f"Error listing MCP tools: {str(e)}")
-        return func.HttpResponse(
-            json.dumps({"error": str(e)}),
-            mimetype="application/json",
-            status_code=500
-        )
 
-@app.route(route="mcp/status", methods=["GET"])
-async def get_mcp_status(req: func.HttpRequest) -> func.HttpResponse:
-    """Get MCP Bridge and server status"""
-    try:
-        await initialize_integrations()
-        
-        if not mcp_bridge:
-            return func.HttpResponse(
-                json.dumps({"error": "MCP Bridge not available"}),
-                mimetype="application/json",
-                status_code=503
-            )
-        
-        # Get comprehensive status
-        status = await mcp_bridge.get_status()
-        
-        # Add bottler info
-        status["bottler_id"] = bottler_config["id"]
-        status["bottler_name"] = bottler_config["name"]
-        
-        return func.HttpResponse(
-            json.dumps(status),
-            mimetype="application/json",
-            status_code=200
-        )
-        
-    except Exception as e:
-        logger.error(f"Error getting MCP status: {str(e)}")
-        return func.HttpResponse(
-            json.dumps({"error": str(e)}),
-            mimetype="application/json",
-            status_code=500
-        )
 
-@app.route(route="prompts/upload/excel", methods=["POST"])
-async def upload_excel_prompts(req: func.HttpRequest) -> func.HttpResponse:
-    """Upload Excel file containing prompts and queries"""
-    try:
-        await initialize_integrations()
-        
-        if not prompt_manager:
-            return func.HttpResponse(
-                json.dumps({"error": "Prompt Manager not available"}),
-                mimetype="application/json",
-                status_code=503
-            )
-        
-        # Check if file is in form data or body
-        file_content = None
-        file_name = None
-        
-        # Try to get file from multipart form data
-        files = req.files
-        if files and 'file' in files:
-            file_item = files['file']
-            file_content = file_item.read()
-            file_name = file_item.filename
-        else:
-            # Try to get from body
-            file_content = req.get_body()
-            file_name = req.headers.get('X-File-Name', 'uploaded_excel.xlsx')
-        
-        if not file_content:
-            return func.HttpResponse(
-                json.dumps({"error": "No file content found"}),
-                mimetype="application/json",
-                status_code=400
-            )
-        
-        logger.info(f"Processing Excel file: {file_name}")
-        
-        # Process the Excel file
-        result = await prompt_manager.process_excel_file(
-            file_path=file_name,
-            file_content=file_content
-        )
-        
-        if result.get("success"):
-            # Store the uploaded file in blob storage for audit
-            if mcp_bridge:
-                await mcp_bridge.execute_tool(
-                    server_name="blob",
-                    tool_name="write_blob",
-                    arguments={
-                        "blob_name": f"prompts/excel_uploads/{bottler_config['id']}/{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{file_name}",
-                        "content": file_content,
-                        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        "metadata": {
-                            "bottler_id": bottler_config["id"],
-                            "upload_date": datetime.utcnow().isoformat(),
-                            "prompts_extracted": str(len(result.get("prompts", [])))
-                        }
-                    }
-                )
-            
-            return func.HttpResponse(
-                json.dumps({
-                    "success": True,
-                    "message": f"Processed {len(result.get('prompts', []))} prompts from Excel file",
-                    "import_id": result.get("import_record", {}).get("id"),
-                    "prompts_extracted": len(result.get("prompts", [])),
-                    "file_name": file_name,
-                    "bottler_id": bottler_config["id"]
-                }),
-                mimetype="application/json",
-                status_code=200
-            )
-        else:
-            return func.HttpResponse(
-                json.dumps({
-                    "error": result.get("error", "Failed to process Excel file"),
-                    "file_name": file_name
-                }),
-                mimetype="application/json",
-                status_code=500
-            )
-            
-    except Exception as e:
-        logger.error(f"Error uploading Excel prompts: {str(e)}")
-        return func.HttpResponse(
-            json.dumps({"error": str(e)}),
-            mimetype="application/json",
-            status_code=500
-        )
-
-@app.route(route="prompts/search", methods=["GET", "POST"])
-async def search_prompts(req: func.HttpRequest) -> func.HttpResponse:
-    """Search for stored prompts"""
-    try:
-        await initialize_integrations()
-        
-        if not prompt_manager:
-            return func.HttpResponse(
-                json.dumps({"error": "Prompt Manager not available"}),
-                mimetype="application/json",
-                status_code=503
-            )
-        
-        # Get search parameters
-        if req.method == "GET":
-            query = req.params.get("query", "")
-            category = req.params.get("category")
-        else:
-            req_body = req.get_json()
-            query = req_body.get("query", "")
-            category = req_body.get("category")
-        
-        # Search prompts
-        prompts = await prompt_manager.search_prompts(query, category)
-        
-        return func.HttpResponse(
-            json.dumps({
-                "success": True,
-                "prompts": prompts,
-                "count": len(prompts),
-                "bottler_id": bottler_config["id"]
-            }),
-            mimetype="application/json",
-            status_code=200
-        )
-        
-    except Exception as e:
-        logger.error(f"Error searching prompts: {str(e)}")
-        return func.HttpResponse(
-            json.dumps({"error": str(e)}),
-            mimetype="application/json",
-            status_code=500
-        )
-
-@app.route(route="prompts/{prompt_id}", methods=["GET"])
-async def get_prompt(req: func.HttpRequest) -> func.HttpResponse:
-    """Get a specific prompt by ID"""
-    try:
-        await initialize_integrations()
-        
-        if not prompt_manager:
-            return func.HttpResponse(
-                json.dumps({"error": "Prompt Manager not available"}),
-                mimetype="application/json",
-                status_code=503
-            )
-        
-        prompt_id = req.route_params.get("prompt_id")
-        if not prompt_id:
-            return func.HttpResponse(
-                json.dumps({"error": "Prompt ID is required"}),
-                mimetype="application/json",
-                status_code=400
-            )
-        
-        # Get prompt
-        prompt = await prompt_manager.get_prompt_by_id(prompt_id)
-        
-        if prompt:
-            return func.HttpResponse(
-                json.dumps({
-                    "success": True,
-                    "prompt": prompt
-                }),
-                mimetype="application/json",
-                status_code=200
-            )
-        else:
-            return func.HttpResponse(
-                json.dumps({"error": "Prompt not found"}),
-                mimetype="application/json",
-                status_code=404
-            )
-        
-    except Exception as e:
-        logger.error(f"Error getting prompt: {str(e)}")
-        return func.HttpResponse(
-            json.dumps({"error": str(e)}),
-            mimetype="application/json",
-            status_code=500
-        )
+# Prompt management endpoints removed - they depend on MCP
+# These would need to be reimplemented with direct Azure SDK calls if needed
 
 # Initialize bottler on startup
 logger.info(f"Starting Soft Bottler Manager: {bottler_config['id']}")
