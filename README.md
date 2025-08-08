@@ -35,12 +35,9 @@ The Soft Bottler Manager is designed as a **SPOKE** in the hub-spoke architectur
 - **⚡ Event Grid** - Event-driven architecture support
 - **🤖 Azure ML Workspace** - AI Foundry capabilities for ML operations
 - **📊 Application Insights & Log Analytics** - Full monitoring stack
-<<<<<<< HEAD
-=======
 - **🌐 Virtual Network** - Network isolation with subnets:
   - `function-subnet` (10.0.1.0/24) - For Function App
   - `ml-subnet` (10.0.2.0/24) - For ML Workspace
->>>>>>> bottler-agent-v1
 - **⚙️ Function App** (Python 3.11) - Serverless compute with all integrations
 
 ### Key Features
