@@ -38,11 +38,23 @@
         "description": "API Management subscription key for this bottler"
       }
     },
+    "azureAIFoundryEndpoint": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure AI Foundry endpoint URL for this bottler (e.g., https://bottler-ai.openai.azure.com/)"
+      }
+    },
+    "azureAIFoundryKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Azure AI Foundry API key for this bottler"
+      }
+    },
     "azureAIFoundryDeployment": {
       "type": "string",
-      "defaultValue": "tccc-model-router",
+      "defaultValue": "gpt-4",
       "metadata": {
-        "description": "Azure AI Foundry model deployment name"
+        "description": "Azure AI Foundry model deployment name for this bottler (e.g., gpt-4, deepseek-v3, llama-3)"
       }
     },
     "azureAIFoundryApiVersion": {
@@ -390,7 +402,7 @@
       }
     },
     {
-      "comments": "=== FUNCTION APP (With All Service Connections) ===",
+      "comments": "=== FUNCTION APP (With All Service Connections) === IMPORTANT: Each bottler MUST use their own Azure AI Foundry resources",
       "type": "Microsoft.Web/sites",
       "apiVersion": "2022-09-01",
       "name": "[variables('functionAppName')]",
@@ -461,11 +473,11 @@
             },
             {
               "name": "AZURE_AI_FOUNDRY_ENDPOINT",
-              "value": ""
+              "value": "[parameters('azureAIFoundryEndpoint')]"
             },
             {
               "name": "AZURE_AI_FOUNDRY_KEY",
-              "value": ""
+              "value": "[parameters('azureAIFoundryKey')]"
             },
             {
               "name": "AZURE_AI_FOUNDRY_DEPLOYMENT",
@@ -473,6 +485,26 @@
             },
             {
               "name": "AZURE_AI_FOUNDRY_API_VERSION",
+              "value": "[parameters('azureAIFoundryApiVersion')]"
+            },
+            {
+              "name": "AI_FOUNDRY_ENDPOINT",
+              "value": "[parameters('azureAIFoundryEndpoint')]"
+            },
+            {
+              "name": "AI_FOUNDRY_KEY",
+              "value": "[parameters('azureAIFoundryKey')]"
+            },
+            {
+              "name": "AI_FOUNDRY_API_KEY",
+              "value": "[parameters('azureAIFoundryKey')]"
+            },
+            {
+              "name": "AI_FOUNDRY_DEPLOYMENT",
+              "value": "[parameters('azureAIFoundryDeployment')]"
+            },
+            {
+              "name": "AI_FOUNDRY_API_VERSION",
               "value": "[parameters('azureAIFoundryApiVersion')]"
             },
             {
